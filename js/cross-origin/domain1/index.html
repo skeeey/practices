@@ -1,0 +1,32 @@
+<html>
+<head>
+    <title>domain1</title>
+</head>
+<body>
+    <iframe src="http://127.0.0.1:8081/index.html"></iframe>
+
+    <br>
+
+    <div>
+        <label for="input0">domain1</label>
+        <input id="input0" value="">
+    </div>
+
+    <!-- Can read the document/storage by embed a different domain script -->
+    <script type="text/javascript" src="http://127.0.0.1:8081/recover.js"></script>
+
+    <script type="text/javascript">
+        // This will be blocked by CORS policy: No 'Access-Control-Allow-Origin'
+        // header is present on the requested resource. If an opaque response
+        // serves your needs, set the request's mode to 'no-cors' to fetch the
+        // resource with CORS disabled.
+        fetch('http://127.0.0.1:8081/test.json')
+        .then(function(response) {
+            return response.json();
+        })
+        .then(function(myJson) {
+            console.log(JSON.stringify(myJson));
+        });
+    </script>
+</body>
+</html>
