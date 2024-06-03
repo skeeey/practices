@@ -62,6 +62,7 @@ func main() {
 		WithSourceID(sourceID).
 		WithCodecs(codec.NewManifestBundleCodec()).
 		WithWorkClientWatcherStore(maestro.NewRESTFullAPIWatcherStore(maestroAPIClient, sourceID)).
+		WithResyncEnabled(false).
 		NewSourceClientHolder(ctx)
 	if err != nil {
 		log.Fatal(err)
