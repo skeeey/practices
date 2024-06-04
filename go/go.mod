@@ -3,8 +3,6 @@ module skeeey/go-test
 go 1.21
 
 require (
-	github.com/confluentinc/confluent-kafka-go/v2 v2.3.0
-	github.com/eclipse/paho.golang v0.21.0
 	github.com/openshift-online/maestro v0.0.0-20240603084515-be8dc759035d
 	k8s.io/apimachinery v0.29.4
 	k8s.io/client-go v0.29.4
@@ -16,7 +14,9 @@ require (
 	github.com/cloudevents/sdk-go/protocol/kafka_confluent/v2 v2.0.0-20240413090539-7fef29478991 // indirect
 	github.com/cloudevents/sdk-go/protocol/mqtt_paho/v2 v2.0.0-20231030012137-0836a524e995 // indirect
 	github.com/cloudevents/sdk-go/v2 v2.15.3-0.20240329120647-e6a74efbacbf // indirect
+	github.com/confluentinc/confluent-kafka-go/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/eclipse/paho.golang v0.21.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/evanphx/json-patch v5.9.0+incompatible // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
