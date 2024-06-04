@@ -10,11 +10,8 @@ import (
 
 	"github.com/openshift-online/maestro/pkg/api/openapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"k8s.io/apimachinery/pkg/watch"
 
-	workv1 "open-cluster-management.io/api/work/v1"
 	"open-cluster-management.io/sdk-go/pkg/cloudevents/generic/options/grpc"
 	"open-cluster-management.io/sdk-go/pkg/cloudevents/work"
 	"open-cluster-management.io/sdk-go/pkg/cloudevents/work/source/codec"
@@ -61,75 +58,18 @@ func main() {
 		WithClientID(fmt.Sprintf("%s-%s", sourceID, rand.String(5))).
 		WithSourceID(sourceID).
 		WithCodecs(codec.NewManifestBundleCodec()).
-		WithWorkClientWatcherStore(maestro.NewRESTFullAPIWatcherStore(maestroAPIClient, sourceID)).
+		WithWorkClientWatcherStore(maestro.NewRESTFullAPIWatcherStore(ctx, maestroAPIClient, sourceID)).
 		WithResyncEnabled(false).
 		NewSourceClientHolder(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	watcher, err := workClient.ManifestWorks(clusterName).Watch(ctx, metav1.ListOptions{})
-
-	go func() {
-		ch := watcher.ResultChan()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event, ok := <-ch:
-				if !ok {
-					return
-				}
-				switch event.Type {
-				case watch.Added:
-					fmt.Printf("the work %v is added", event.Object)
-				case watch.Modified:
-					fmt.Printf("the work %v is modified", event.Object)
-				case watch.Deleted:
-					fmt.Printf("the work %v is deleted", event.Object)
-				}
-			}
-		}
-	}()
-
 	// use workClient to get/create/patch/list works
-	_, err = workClient.ManifestWorks(clusterName).Create(ctx, newManifestWork("test"), metav1.CreateOptions{})
+	_, err = workClient.ManifestWorks(clusterName).Create(ctx, maestro.NewManifestWork("test"), metav1.CreateOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	<-ctx.Done()
-}
-
-func newManifestWork(name string) *workv1.ManifestWork {
-	return &workv1.ManifestWork{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Spec: workv1.ManifestWorkSpec{
-			Workload: workv1.ManifestsTemplate{
-				Manifests: []workv1.Manifest{
-					newManifest("test"),
-				},
-			},
-		},
-	}
-}
-
-func newManifest(name string) workv1.Manifest {
-	obj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "Secret",
-			"metadata": map[string]interface{}{
-				"namespace": "test",
-				"name":      name,
-			},
-			"data": "test",
-		},
-	}
-	objectStr, _ := obj.MarshalJSON()
-	manifest := workv1.Manifest{}
-	manifest.Raw = objectStr
-	return manifest
 }
