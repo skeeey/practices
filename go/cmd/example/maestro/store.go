@@ -2,6 +2,7 @@ package maestro
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -20,13 +21,14 @@ import (
 	"k8s.io/client-go/tools/cache"
 	workv1 "open-cluster-management.io/api/work/v1"
 
+	cetypes "open-cluster-management.io/sdk-go/pkg/cloudevents/generic/types"
 	"open-cluster-management.io/sdk-go/pkg/cloudevents/work/common"
+	"open-cluster-management.io/sdk-go/pkg/cloudevents/work/payload"
 	"open-cluster-management.io/sdk-go/pkg/cloudevents/work/utils"
 )
 
 type watchEvent struct {
-	Key  string
-	Type watch.EventType
+	Key types.UID
 }
 
 // This will be provided in maestro repo as a lib
@@ -36,17 +38,31 @@ type RESTFullAPIWatcherStore struct {
 	result chan watch.Event
 	done   chan struct{}
 
-	sourceID   string
-	apiClient  *openapi.APIClient
+	sourceID  string
+	apiClient *openapi.APIClient
+
+	// A queue to save the work client send events, if run a client without a watcher,
+	// it will block the client, this queue helps to resolve this blocking.
+	// Only save the latest event for a work.
 	eventQueue cache.Queue
 }
 
 func NewRESTFullAPIWatcherStore(ctx context.Context, apiClient *openapi.APIClient, sourceID string) *RESTFullAPIWatcherStore {
 	s := &RESTFullAPIWatcherStore{
-		result:    make(chan watch.Event),
-		done:      make(chan struct{}),
+		result: make(chan watch.Event),
+		done:   make(chan struct{}),
+
 		sourceID:  sourceID,
 		apiClient: apiClient,
+
+		eventQueue: cache.NewFIFO(func(obj interface{}) (string, error) {
+			evt, ok := obj.(*watchEvent)
+			if !ok {
+				return "", fmt.Errorf("unknown object type %T", obj)
+			}
+
+			return string(evt.Key), nil
+		}),
 	}
 
 	go wait.Until(s.processLoop, time.Second, ctx.Done())
@@ -72,23 +88,23 @@ func (m *RESTFullAPIWatcherStore) Stop() {
 	}
 }
 
+func (m *RESTFullAPIWatcherStore) HandleReceivedWork(action cetypes.ResourceAction, work *workv1.ManifestWork) error {
+	switch action {
+	case cetypes.StatusModified:
+		m.eventQueue.Add(&watchEvent{Key: work.UID})
+	default:
+		return fmt.Errorf("unsupported resource action %s", action)
+	}
+	return nil
+}
+
 func (m *RESTFullAPIWatcherStore) Get(namespace, name string) (*workv1.ManifestWork, error) {
 	id := utils.UID(m.sourceID, namespace, name)
-	rb, resp, err := m.apiClient.DefaultApi.ApiMaestroV1ResourceBundlesIdGet(context.Background(), id).Execute()
-	if err != nil {
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, errors.NewNotFound(common.ManifestWorkGR, name)
-		}
-
-		return nil, err
-	}
-
-	return toManifestWork(rb)
+	return m.getWorkByID(id)
 }
 
 // List the works from the cache with the list options
 func (m *RESTFullAPIWatcherStore) List(opts metav1.ListOptions) ([]*workv1.ManifestWork, error) {
-	// TODO add cluster name as filter
 	clusterName := ""
 	if len(opts.FieldSelector) != 0 {
 		fieldSelector, err := fields.ParseSelector(opts.FieldSelector)
@@ -103,9 +119,10 @@ func (m *RESTFullAPIWatcherStore) List(opts metav1.ListOptions) ([]*workv1.Manif
 			}
 		}
 	}
+
 	apiRequest := m.apiClient.DefaultApi.ApiMaestroV1ResourceBundlesGet(context.Background())
 	if clusterName != "" {
-		apiRequest = apiRequest.Search(fmt.Sprintf("name = '%s'", clusterName))
+		apiRequest = apiRequest.Search(fmt.Sprintf("consumer_name = '%s'", clusterName))
 	}
 
 	rbs, _, err := apiRequest.Execute()
@@ -146,19 +163,32 @@ func (m *RESTFullAPIWatcherStore) ListAll() ([]*workv1.ManifestWork, error) {
 }
 
 func (m *RESTFullAPIWatcherStore) Add(work *workv1.ManifestWork) error {
-	return m.eventQueue.Add(&watchEvent{Key: key(work), Type: watch.Added})
+	return nil
 }
 
 func (m *RESTFullAPIWatcherStore) Update(work *workv1.ManifestWork) error {
-	return m.eventQueue.Update(&watchEvent{Key: key(work), Type: watch.Modified})
+	return nil
 }
 
 func (m *RESTFullAPIWatcherStore) Delete(work *workv1.ManifestWork) error {
-	return m.eventQueue.Update(&watchEvent{Key: key(work), Type: watch.Deleted})
+	return nil
 }
 
 func (m *RESTFullAPIWatcherStore) HasInitiated() bool {
-	return false
+	return true
+}
+
+func (m *RESTFullAPIWatcherStore) getWorkByID(id string) (*workv1.ManifestWork, error) {
+	rb, resp, err := m.apiClient.DefaultApi.ApiMaestroV1ResourceBundlesIdGet(context.Background(), id).Execute()
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, errors.NewNotFound(common.ManifestWorkGR, id)
+		}
+
+		return nil, err
+	}
+
+	return toManifestWork(rb)
 }
 
 // processLoop drains the work event queue and send the event to the watch channel.
@@ -185,38 +215,30 @@ func (m *RESTFullAPIWatcherStore) processLoop() {
 			return
 		}
 
-		namespace, name, err := cache.SplitMetaNamespaceKey(evt.Key)
-		if err != nil {
-			return
-		}
-
-		work, err := m.Get(namespace, name)
+		// TODO returning a work with spec instead of this operation
+		work, err := m.getWorkByID(string(evt.Key))
 
 		if errors.IsNotFound(err) {
-			if evt.Type == watch.Deleted {
-				// the work has been deleted, return a work only with its namespace and name
-				// this will be blocked until this event is consumed
-				m.result <- watch.Event{
-					Type: watch.Deleted,
-					Object: &workv1.ManifestWork{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      name,
-							Namespace: namespace,
-						},
+			// TODO also return the work's name and namespace
+			// the work has been deleted, return a work only with its uid
+			// this will be blocked until this event is consumed
+			m.result <- watch.Event{
+				Type: watch.Deleted,
+				Object: &workv1.ManifestWork{
+					ObjectMeta: metav1.ObjectMeta{
+						UID: evt.Key,
 					},
-				}
-				return
+				},
 			}
-
-		}
-
-		if err != nil {
-			fmt.Printf("failed to get the work %s, %v", evt.Key, err)
 			return
 		}
 
+		if err != nil {
+			fmt.Printf("failed to get the work %s, %v\n", evt.Key, err)
+			return
+		}
 		// this will be blocked until this event is consumed
-		m.result <- watch.Event{Type: evt.Type, Object: work}
+		m.result <- watch.Event{Type: watch.Modified, Object: work}
 	}
 }
 
@@ -235,8 +257,7 @@ func toManifestWork(rb *openapi.ResourceBundle) (*workv1.ManifestWork, error) {
 	}
 
 	// TODO set deleteOption and ManifestConfigs
-
-	return &workv1.ManifestWork{
+	work := &workv1.ManifestWork{
 		ObjectMeta: metav1.ObjectMeta{
 			UID:             types.UID(*rb.Id),
 			Name:            *rb.Name,
@@ -248,9 +269,25 @@ func toManifestWork(rb *openapi.ResourceBundle) (*workv1.ManifestWork, error) {
 				Manifests: manifests,
 			},
 		},
-	}, nil
-}
+	}
 
-func key(work *workv1.ManifestWork) string {
-	return work.Namespace + "/" + work.Name
+	if rb.Status != nil {
+		status, err := json.Marshal(rb.Status)
+		if err != nil {
+			return nil, err
+		}
+		manifestStatus := &payload.ManifestBundleStatus{}
+		if err := json.Unmarshal(status, manifestStatus); err != nil {
+			return nil, err
+		}
+
+		work.Status = workv1.ManifestWorkStatus{
+			Conditions: manifestStatus.Conditions,
+			ResourceStatus: workv1.ManifestResourceStatus{
+				Manifests: manifestStatus.ResourceStatus,
+			},
+		}
+	}
+
+	return work, nil
 }

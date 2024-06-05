@@ -3,11 +3,12 @@ module skeeey/go-test
 go 1.21
 
 require (
+	github.com/evanphx/json-patch v5.9.0+incompatible
 	github.com/openshift-online/maestro v0.0.0-20240603084515-be8dc759035d
 	k8s.io/apimachinery v0.29.4
 	k8s.io/client-go v0.29.4
 	open-cluster-management.io/api v0.13.1-0.20240506072237-800b00d9f0db
-	open-cluster-management.io/sdk-go v0.13.1-0.20240520073308-f18d198a844d
+	open-cluster-management.io/sdk-go v0.13.1-0.20240605032202-2a0633ddf34e
 )
 
 require (
@@ -18,7 +19,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/eclipse/paho.golang v0.11.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
-	github.com/evanphx/json-patch v5.9.0+incompatible // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
@@ -60,5 +60,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
-
-replace open-cluster-management.io/sdk-go => github.com/skeeey/sdk-go v0.0.0-20240603095101-737dec398085
