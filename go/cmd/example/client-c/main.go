@@ -11,7 +11,8 @@ import (
 
 	"github.com/openshift-online/maestro/pkg/api/openapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/rand"
 
 	workv1 "open-cluster-management.io/api/work/v1"
 
@@ -20,20 +21,11 @@ import (
 	"open-cluster-management.io/sdk-go/pkg/cloudevents/work/source/codec"
 
 	"skeeey/go-test/cmd/example/maestro"
-	"skeeey/go-test/signal"
 )
 
 func main() {
-	shutdownCtx, cancel := context.WithCancel(context.TODO())
-	shutdownHandler := signal.SetupSignalHandler()
-	go func() {
-		defer cancel()
-		<-shutdownHandler
-		fmt.Println("Received SIGTERM or SIGINT signal, shutting down controller.")
-	}()
-
-	ctx, terminate := context.WithCancel(shutdownCtx)
-	defer terminate()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	maestroAPIClient := openapi.NewAPIClient(&openapi.Configuration{
 		DefaultHeader: make(map[string]string),
@@ -61,7 +53,7 @@ func main() {
 	clusterName := "15efbd18-2848-430f-9a70-5c0408ea262e"
 
 	workClient, err := work.NewClientHolderBuilder(grpcOptions).
-		WithClientID(fmt.Sprintf("%s-client-a", sourceID)).
+		WithClientID(fmt.Sprintf("%s-client-c", sourceID)).
 		WithSourceID(sourceID).
 		WithCodecs(codec.NewManifestBundleCodec()).
 		WithWorkClientWatcherStore(maestro.NewRESTFullAPIWatcherStore(ctx, maestroAPIClient, sourceID)).
@@ -71,32 +63,38 @@ func main() {
 		log.Fatal(err)
 	}
 
-	watcher, err := workClient.ManifestWorks(clusterName).Watch(ctx, metav1.ListOptions{})
+	// use workClient to list/get/create/patch/delete works
+	workName := "client-c" + rand.String(5)
+	_, err = workClient.ManifestWorks(clusterName).Create(ctx, maestro.NewManifestWork(workName), metav1.CreateOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	go func() {
-		ch := watcher.ResultChan()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event, ok := <-ch:
-				if !ok {
-					return
-				}
-				switch event.Type {
-				case watch.Modified:
-					fmt.Printf("watched work (uid=%s) is modified\n", event.Object.(*workv1.ManifestWork).UID)
-				case watch.Deleted:
-					fmt.Printf("watched work (uid=%s) is deleted\n", event.Object.(*workv1.ManifestWork).UID)
-				}
-			}
-		}
-	}()
+	work, err := workClient.ManifestWorks(clusterName).Get(ctx, workName, metav1.GetOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("the work (uid=%s) is created\n", work.UID)
 
-	// use workClient to list/get/create/patch/delete works
+	newWork := work.DeepCopy()
+	newWork.Spec.Workload.Manifests = []workv1.Manifest{
+		maestro.NewManifest(workName),
+	}
+	patchData, err := maestro.ToWorkPatch(work, newWork)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = workClient.ManifestWorks(clusterName).Patch(ctx, workName, types.MergePatchType, patchData, metav1.PatchOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("the work (uid=%s) is updated\n", work.UID)
 
-	<-ctx.Done()
+	<-time.After(10 * time.Second)
+
+	err = workClient.ManifestWorks(clusterName).Delete(ctx, workName, metav1.DeleteOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("the work (uid=%s) is deleting\n", work.UID)
 }
